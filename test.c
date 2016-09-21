@@ -54,7 +54,6 @@ void test_parse_expect_value() {
 void test_parse_invalid_value() {
 	TEST_ERROR(LEPT_PARSE_INVALID_VALUE, "nul");
 	TEST_ERROR(LEPT_PARSE_INVALID_VALUE, "nulx");
-	TEST_ERROR(LEPT_PARSE_INVALID_VALUE, "nullx");
 
 	 /* invalid number */
 	TEST_ERROR(LEPT_PARSE_INVALID_VALUE, "+0");
@@ -69,6 +68,13 @@ void test_parse_invalid_value() {
 }
 
 void test_parse_root_not_singular() {
+	/*
+	* 尽量解析出更多的正确结果，
+	* 例如nullx，则可以解析出成合法的null 和不合法的x
+	* 所以返回LEPT_PARSE_ROOT_NOT_SINGULAR
+	*/
+	TEST_ERROR(LEPT_PARSE_ROOT_NOT_SINGULAR, "nullx");
+	TEST_ERROR(LEPT_PARSE_ROOT_NOT_SINGULAR, "truex");
 	TEST_ERROR(LEPT_PARSE_ROOT_NOT_SINGULAR, "null x");
 	TEST_ERROR(LEPT_PARSE_ROOT_NOT_SINGULAR, "false a");
 	TEST_ERROR(LEPT_PARSE_ROOT_NOT_SINGULAR, "null true");
@@ -85,7 +91,6 @@ void test_parse_null() {
 void test_parse_true() {
 	TEST_ERROR(LEPT_PARSE_INVALID_VALUE, "tru");
 	TEST_ERROR(LEPT_PARSE_INVALID_VALUE, "trux");
-	TEST_ERROR(LEPT_PARSE_INVALID_VALUE, "truex");
 	TEST_ERROR(LEPT_PARSE_ROOT_NOT_SINGULAR, "true x");
 	TEST_ERROR(LEPT_PARSE_OK, "true");
 }
@@ -111,6 +116,22 @@ void test_parse_number() {
 	TEST_NUMBER(12.34E10, "12.34E10");
 	TEST_NUMBER(12.34e10, "12.34e10");
 	TEST_NUMBER(0.0, "1e-10000"); /* must underflow */
+
+	// 边界值测试
+	TEST_NUMBER(1.0000000000000002, "1.0000000000000002"); /* the smallest number > 1 */
+    TEST_NUMBER( 4.9406564584124654e-324, "4.9406564584124654e-324"); /* minimum denormal */
+    TEST_NUMBER(-4.9406564584124654e-324, "-4.9406564584124654e-324");
+    TEST_NUMBER( 2.2250738585072009e-308, "2.2250738585072009e-308");  /* Max subnormal double */
+    TEST_NUMBER(-2.2250738585072009e-308, "-2.2250738585072009e-308");
+    TEST_NUMBER( 2.2250738585072014e-308, "2.2250738585072014e-308");  /* Min normal positive double */
+    TEST_NUMBER(-2.2250738585072014e-308, "-2.2250738585072014e-308");
+    TEST_NUMBER( 1.7976931348623157e+308, "1.7976931348623157e+308");  /* Max double */
+    TEST_NUMBER(-1.7976931348623157e+308, "-1.7976931348623157e+308");
+}
+
+void test_parse_number_too_big() {
+    TEST_ERROR(LEPT_PARSE_NUMBER_TOO_BIG, "1e309");
+    TEST_ERROR(LEPT_PARSE_NUMBER_TOO_BIG, "-1e309");
 }
 
 void test_parse() {
@@ -121,11 +142,17 @@ void test_parse() {
 	test_parse_invalid_value();
 	test_parse_root_not_singular();
 	test_parse_number();
+	test_parse_number_too_big();
 }
 
 int main() {
+	lept_value v;
 	test_parse();
 	printf("%d/%d (%3.2f%%) passed\n", test_pass, test_count, test_pass * 100.0 / test_count);
+
+	
+	lept_parse(&v, "0123");
+	printf("%lf", v.n);
 
 	return main_ret;
 }

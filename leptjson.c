@@ -1,6 +1,7 @@
 #include <assert.h>  /* assert() */
 #include <stdlib.h>  /* NULL, strtod() */
-#include <string.h>
+#include <errno.h>   /* errno, ERANGE */
+#include <math.h>    /* HUGE_VAL */
 #include "leptjson.h"
 
 typedef struct {
@@ -12,6 +13,9 @@ typedef struct {
 		assert(*c->json == (ch));\
 		c->json++;\
 	} while(0)
+
+#define ISDIGIT(ch)     ((ch) >= '0' && (ch) <= '9')
+#define ISDIGIT1TO9(ch) ((ch) >= '1' && (ch) <= '9')
 
 /**
 * the judgement of wheather char is white space
@@ -35,85 +39,97 @@ static void lept_parse_whitespace(lept_context* c) {
 	c->json = p;
 }
 
-/*
-* null = "null"
+/**
+* reafactor parse function of null\ true\ false
+* 
 */
-static int lept_parse_null(lept_context* c, lept_value* v) {
-	EXPECT(c, 'n');
-	if (c->json[0] != 'u' || c->json[1] != 'l' || c->json[2] != 'l') {
-		return LEPT_PARSE_INVALID_VALUE;
+static int lept_parse_literal(lept_context* c, lept_value* v, const char* literal, lept_type type) {
+	// note: use size_t type on array length or some index, rather than int or unsigned type
+	size_t i;
+	EXPECT(c, literal[0]);
+	for (i = 0; literal[i + 1]; i++) {
+		if (c->json[i] != literal[i + 1]) {
+			return LEPT_PARSE_INVALID_VALUE;
+		}
 	}
-	c->json += 3;
-	v->type = LEPT_NULL;
-
-	return LEPT_PARSE_OK;
-}
-
-/*
-* true = "true"
-*/
-static int lept_parse_true(lept_context* c, lept_value* v) {
-	EXPECT(c, 't');
-	if (c->json[0] != 'r' || c->json[1] != 'u' || c->json[2] != 'e') {
-		return LEPT_PARSE_INVALID_VALUE;
-	}
-	c->json += 3;
-	v->type = LEPT_TRUE;
-
-	return LEPT_PARSE_OK;
-}
-
-/*
-* false = "false"
-*/
-static int lept_parse_false(lept_context* c, lept_value* v) {
-	EXPECT(c, 'f');
-	if (c->json[0] != 'a' || c->json[1] != 'l' || c->json[2] != 's' || c->json[3] != 'e') {
-		return LEPT_PARSE_INVALID_VALUE;
-	}
-	c->json += 4;
-	v->type = LEPT_FALSE;
+	c->json += i;
+	v->type = type;
 
 	return LEPT_PARSE_OK;
 }
 
 static int lept_parse_number(lept_context* c, lept_value* v) {
-	char* end;
-	
+	const char* p = c->json;
+
+	/* 符号，只有 -(负号) 合法 */
+	if (*p == '-') p++;
+
 	/* 
-	* begin with '+'\ '.'  is invalid number
-	* end with '.' is invalid number
+	* 整数部分
+	* 1. 单个的0，检查下一个
 	*/
-	if (c->json[0] == '+' || c->json[0] == '.' || c->json[strlen(c->json) - 1] == '.') {
-		return LEPT_PARSE_INVALID_VALUE;
+	if (*p == '0') {
+		p++;
+	} else {
+		/*
+		* 2. 第一个数字必须是数字1-9
+		*/
+		if (!ISDIGIT1TO9(*p)) {
+			return LEPT_PARSE_INVALID_VALUE;
+		}
+
+		for (p++; ISDIGIT(*p); p++);
 	}
 
 	/*
-	* after the first zero should be '.' or nothing
+	* 小数部分
+	* 如果出现小数点，后面至少出现一个数字
 	*/
-	if (c->json[0] == '0') {
-		if (c->json[1] == '.' || c->json[1] == '\0') {
-			// It's allowed. We should always try to write truthy conditions.
-		} else {
-			return LEPT_PARSE_ROOT_NOT_SINGULAR;
+	if (*p == '.') {
+		// 跳过.(小数点)
+		p++;
+
+		if (!ISDIGIT(*p)) {
+			return LEPT_PARSE_INVALID_VALUE;
 		}
+
+		for (p++; ISDIGIT(*p); p++);
 	}
 
-	v->n = strtod(c->json, &end);
-	if (c->json == end) {
-		return LEPT_PARSE_INVALID_VALUE;
+	/*
+	* 指数部分
+	* 如果出现e 或E，后面可以出现正负号
+	* 然后至少出现一个数字
+	*/
+	if (*p == 'e' || *p == 'E') {
+		// 跳过e 或E
+		p++;
+
+		if (*p == '-' || *p == '+') p++;
+
+		if (!ISDIGIT(*p)) return LEPT_PARSE_INVALID_VALUE;
+
+		for (p++; ISDIGIT(*p); p++);
 	}
-	c->json = end;
+
+	/* 数字过大的处理 */
+	errno = 0;
+	v->n = strtod(c->json, NULL);
+	if (errno == ERANGE && (v->n == HUGE_VAL || v->n == -HUGE_VAL)) {
+		return LEPT_PARSE_NUMBER_TOO_BIG;
+	}
+	
 	v->type = LEPT_NUMBER;
+	c->json = p;
 
 	return LEPT_PARSE_OK;
 }
 
 static int lept_parse_value(lept_context* c, lept_value* v) {
 	switch(*c->json) {
-		case 'n': return lept_parse_null(c, v);
-		case 't': return lept_parse_true(c, v);
-		case 'f': return lept_parse_false(c, v);
+		case 'n': return lept_parse_literal(c, v, "null", LEPT_NULL);
+		case 't': return lept_parse_literal(c, v, "true", LEPT_TRUE);
+		case 'f': return lept_parse_literal(c, v, "false", LEPT_FALSE);
 		default: return lept_parse_number(c, v);
 		case '\0': return LEPT_PARSE_EXPECT_VALUE;
 	}
@@ -129,17 +145,10 @@ int lept_parse(lept_value* v, const char* json) {
 	lept_parse_whitespace(&c);
 
 	if((ret = lept_parse_value(&c, v)) == LEPT_PARSE_OK) {
-		if (*c.json == '\0') {
-			return LEPT_PARSE_OK;
-		}
-		
-		if (!isWhiteSpace(*c.json)) {
-			return LEPT_PARSE_INVALID_VALUE;
-		}
-
 		lept_parse_whitespace(&c);
 		
 		if (*c.json != '\0') {
+			v->type = LEPT_NULL;
 			ret = LEPT_PARSE_ROOT_NOT_SINGULAR;
 		}
 	}
